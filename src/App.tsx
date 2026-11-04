@@ -13,6 +13,7 @@ import TerminalModal from './components/TerminalModal';
 import ProjectDetailModal from './components/ProjectDetailModal';
 import IndexArchiveModal from './components/IndexArchiveModal';
 import { ProjectItem, OpenSourceItem } from './types';
+import ButterflyTrail from './components/ButterflyTrail';
 
 export default function App() {
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
@@ -28,9 +29,11 @@ export default function App() {
   };
 
   return (
+    
     <div className="min-h-screen bg-[#F8F7F3] text-[#121212] selection:bg-[#2563EB] selection:text-white relative">
       {/* unseen.co inspired dynamic fluid cursor */}
       <CustomCursor />
+      <ButterflyTrail />
 
       {/* Top Header Bar */}
       <Header onOpenTerminal={() => setIsTerminalOpen(true)} />
