@@ -1,118 +1,248 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { motion, useSpring, useMotionValue } from 'motion/react';
+import { useEffect, useRef } from 'react';
+
+/*
+  Animated cat cursor.
+
+  The original Windows .ani cursors cannot be used on a website, so the animation was split into:
+    /cursors/cat.webp       53 animation frames of the cat, side by side (each frame is 64x64)
+    /cursors/pointers.png   the 15 small pointer icons (arrow, hand, text beam...), each 16x16
+
+  The cursor follows the mouse, swaps the pointer icon to match what you hover over,
+  and loops the cat with the same timing as the original file.
+*/
+
+const CAT_FRAMES = 53;
+const CAT_CELL = 64; // size of one cat frame in the image
+const POINTER_CELL = 16; // size of one pointer icon in the image
+
+// How big things are drawn. Keep POINTER_SCALE a whole number (1 or 2) so the pixel art stays sharp.
+const POINTER_SCALE = 1;
+const CAT_SCALE = 0.85;
+
+// How long each cat frame is shown, in milliseconds (taken from the original cursor file).
+const FRAME_MS = [67, 133, 67, 67, 133, 67, 67, 133, 67, 67, 133, 67, 67, 67, 117, 67, 67, 117, 67, 67, 117, 67, 67, 117, 67, 67, 117, 67, 67, 117, 67, 67, 117, 67, 67, 117, 67, 67, 117, 67, 67, 117, 67, 67, 117, 67, 67, 117, 67, 67, 117, 67, 67];
+const CUMULATIVE: number[] = [];
+FRAME_MS.reduce((sum, ms) => {
+  sum += ms;
+  CUMULATIVE.push(sum);
+  return sum;
+}, 0);
+const LOOP_MS = CUMULATIVE[CUMULATIVE.length - 1];
+
+// Which pointer icon to use, and where its "click point" is (in image pixels).
+const POINTERS = {
+  arrow: { i: 0, hot: [1, 1] },
+  link: { i: 1, hot: [3, 0] },
+  text: { i: 2, hot: [3, 5] },
+  help: { i: 3, hot: [4, 0] },
+  unavailable: { i: 4, hot: [6, 6] },
+  working: { i: 5, hot: [1, 1] },
+  busy: { i: 6, hot: [1, 1] },
+  precision: { i: 7, hot: [6, 6] },
+  move: { i: 8, hot: [6, 6] },
+  ns: { i: 9, hot: [4, 6] },
+  ew: { i: 10, hot: [6, 3] },
+  nwse: { i: 11, hot: [5, 5] },
+  nesw: { i: 12, hot: [5, 5] },
+  alt: { i: 13, hot: [3, 0] },
+  pen: { i: 14, hot: [0, 0] },
+} as const;
+
+type Kind = keyof typeof POINTERS;
+
+const CURSOR_CLASS_TO_KIND: [RegExp, Kind][] = [
+  [/(^|\s)cursor-(not-allowed|no-drop)(\s|$)/, 'unavailable'],
+  [/(^|\s)cursor-help(\s|$)/, 'help'],
+  [/(^|\s)cursor-(wait)(\s|$)/, 'busy'],
+  [/(^|\s)cursor-(progress)(\s|$)/, 'working'],
+  [/(^|\s)cursor-(crosshair|cell)(\s|$)/, 'precision'],
+  [/(^|\s)cursor-(move|grab|grabbing|all-scroll)(\s|$)/, 'move'],
+  [/(^|\s)cursor-(ns-resize|row-resize)(\s|$)/, 'ns'],
+  [/(^|\s)cursor-(ew-resize|col-resize)(\s|$)/, 'ew'],
+  [/(^|\s)cursor-text(\s|$)/, 'text'],
+  [/(^|\s)cursor-pointer(\s|$)/, 'link'],
+];
+
+const CLICKABLE =
+  'a[href], button, summary, select, label[for], [role="button"], [role="link"], [role="tab"], [role="menuitem"], [data-cursor], input[type="range"], input[type="checkbox"], input[type="radio"], input[type="button"], input[type="submit"]';
+const TEXT_FIELD =
+  'textarea, [contenteditable=""], [contenteditable="true"], input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="tel"], input[type="password"], input[type="number"]';
+
+// Decides which pointer to show for the element under the mouse.
+function kindFor(el: Element | null): Kind {
+  if (!el) return 'arrow';
+
+  if (el.closest(':disabled, [aria-disabled="true"]')) return 'unavailable';
+  if (el.closest(TEXT_FIELD)) return 'text';
+
+  // Tailwind classes like cursor-help or cursor-not-allowed
+  const withCursorClass = el.closest('[class*="cursor-"]');
+  if (withCursorClass) {
+    const classes = withCursorClass.getAttribute('class') ?? '';
+    for (const [pattern, kind] of CURSOR_CLASS_TO_KIND) if (pattern.test(classes)) return kind;
+  }
+
+  if (el.closest(CLICKABLE)) return 'link';
+  return 'arrow';
+}
 
 export default function CustomCursor() {
-  const [isVisible, setIsVisible] = useState(false);
-  const [cursorLabel, setCursorLabel] = useState<string | null>(null);
-  const [isHovered, setIsHovered] = useState(false);
-  const [isMouseDown, setIsMouseDown] = useState(false);
-
-  const mouseX = useMotionValue(-100);
-  const mouseY = useMotionValue(-100);
-
-  // Smooth springs for fluid trailing physics inspired by unseen.co
-  const smoothX = useSpring(mouseX, { damping: 28, stiffness: 350, mass: 0.5 });
-  const smoothY = useSpring(mouseY, { damping: 28, stiffness: 350, mass: 0.5 });
+  const rootRef = useRef<HTMLDivElement>(null);
+  const catRef = useRef<HTMLDivElement>(null);
+  const pointerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // Only enable on desktop pointer devices
-    const isFinePointer = window.matchMedia('(pointer: fine)').matches;
-    if (!isFinePointer) return;
+    const root = rootRef.current;
+    const cat = catRef.current;
+    const pointer = pointerRef.current;
+    if (!root || !cat || !pointer) return;
 
-    document.body.classList.add('custom-cursor-active');
+    // Only for devices that have a real mouse. Phones and tablets keep their normal behaviour.
+    if (!window.matchMedia('(any-hover: hover) and (any-pointer: fine)').matches) return;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-    const handleMouseMove = (e: MouseEvent) => {
-      mouseX.set(e.clientX);
-      mouseY.set(e.clientY);
-      if (!isVisible) setIsVisible(true);
+    const html = document.documentElement;
+    const hideSystemCursor = document.createElement('style');
+    hideSystemCursor.textContent = 'html.cc-active, html.cc-active * { cursor: none !important; }';
+    document.head.appendChild(hideSystemCursor);
 
-      // Check hovered elements for cursor attributes
-      const target = e.target as HTMLElement | null;
-      if (!target) return;
+    let kind: Kind = 'arrow';
+    let x = -200;
+    let y = -200;
+    let started = false;
 
-      const interactive = target.closest('[data-cursor], button, a, input, select, textarea');
-      if (interactive) {
-        setIsHovered(true);
-        const label = interactive.getAttribute('data-cursor');
-        setCursorLabel(label);
-      } else {
-        setIsHovered(false);
-        setCursorLabel(null);
-      }
+    const place = () => {
+      const [hx, hy] = POINTERS[kind].hot;
+      root.style.transform = `translate3d(${x - hx * POINTER_SCALE}px, ${y - hy * POINTER_SCALE}px, 0)`;
     };
 
-    const handleMouseDown = () => setIsMouseDown(true);
-    const handleMouseUp = () => setIsMouseDown(false);
-    const handleMouseLeave = () => setIsVisible(false);
-    const handleMouseEnter = () => setIsVisible(true);
+    const setKind = (next: Kind) => {
+      if (next === kind) return;
+      kind = next;
+      pointer.style.backgroundPosition = `${-POINTERS[kind].i * POINTER_CELL * POINTER_SCALE}px 0`;
+      place();
+    };
 
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mousedown', handleMouseDown);
-    window.addEventListener('mouseup', handleMouseUp);
-    document.addEventListener('mouseleave', handleMouseLeave);
-    document.addEventListener('mouseenter', handleMouseEnter);
+    const show = (visible: boolean) => {
+      root.style.opacity = visible ? '1' : '0';
+    };
+
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerType !== 'mouse') return;
+      x = e.clientX;
+      y = e.clientY;
+      if (!started) {
+        started = true;
+        html.classList.add('cc-active'); // hide the system cursor only once ours is ready
+        show(true);
+      }
+      place();
+    };
+
+    const onOver = (e: PointerEvent) => {
+      if (e.pointerType !== 'mouse') return;
+      setKind(kindFor(e.target as Element | null));
+    };
+
+    const onDown = () => {
+      cat.style.transform = 'scale(0.9)';
+    };
+    const onUp = () => {
+      cat.style.transform = 'scale(1)';
+    };
+    const onLeave = () => show(false);
+    const onEnter = () => {
+      if (started) show(true);
+    };
+
+    // Cat animation: only touches the page when the frame actually changes.
+    let raf = 0;
+    let shown = -1;
+    const frameAt = (t: number) => {
+      const m = t % LOOP_MS;
+      let f = 0;
+      while (f < CUMULATIVE.length - 1 && m >= CUMULATIVE[f]) f++;
+      return f;
+    };
+    const tick = (t: number) => {
+      const f = frameAt(t);
+      if (f !== shown) {
+        shown = f;
+        cat.style.backgroundPosition = `${-f * CAT_CELL * CAT_SCALE}px 0`;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    if (!reduceMotion) raf = requestAnimationFrame(tick);
+
+    window.addEventListener('pointermove', onMove, { passive: true });
+    document.addEventListener('pointerover', onOver, true);
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('pointerup', onUp, true);
+    document.documentElement.addEventListener('mouseleave', onLeave);
+    document.documentElement.addEventListener('mouseenter', onEnter);
 
     return () => {
-      document.body.classList.remove('custom-cursor-active');
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mousedown', handleMouseDown);
-      window.removeEventListener('mouseup', handleMouseUp);
-      document.removeEventListener('mouseleave', handleMouseLeave);
-      document.removeEventListener('mouseenter', handleMouseEnter);
+      cancelAnimationFrame(raf);
+      window.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerover', onOver, true);
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('pointerup', onUp, true);
+      document.documentElement.removeEventListener('mouseleave', onLeave);
+      document.documentElement.removeEventListener('mouseenter', onEnter);
+      html.classList.remove('cc-active');
+      hideSystemCursor.remove();
     };
-  }, [mouseX, mouseY, isVisible]);
-
-  if (!isVisible) return null;
+  }, []);
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-9999 overflow-hidden transition-opacity duration-300">
-      {/* Outer fluid follower ring / morphing badge */}
-      <motion.div
+    <div
+      ref={rootRef}
+      aria-hidden="true"
+      style={{
+        position: 'fixed',
+        left: 0,
+        top: 0,
+        width: 0,
+        height: 0,
+        zIndex: 10001,
+        pointerEvents: 'none',
+        opacity: 0,
+        willChange: 'transform',
+        transition: 'opacity 0.15s',
+      }}
+    >
+      {/* The dancing cat */}
+      <div
+        ref={catRef}
         style={{
-          x: smoothX,
-          y: smoothY,
-          translateX: '-50%',
-          translateY: '-50%',
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: CAT_CELL * CAT_SCALE,
+          height: CAT_CELL * CAT_SCALE,
+          backgroundImage: 'url(/cursors/cat.webp)',
+          backgroundSize: `${CAT_FRAMES * CAT_CELL * CAT_SCALE}px ${CAT_CELL * CAT_SCALE}px`,
+          backgroundRepeat: 'no-repeat',
+          transformOrigin: '0 0',
+          transition: 'transform 0.08s',
         }}
-        animate={{
-          scale: isMouseDown ? 0.85 : isHovered ? (cursorLabel ? 1 : 1.4) : 1,
-          width: cursorLabel ? 'auto' : isHovered ? 48 : 34,
-          height: cursorLabel ? 32 : isHovered ? 48 : 34,
-          paddingLeft: cursorLabel ? 14 : 0,
-          paddingRight: cursorLabel ? 14 : 0,
-          backgroundColor: cursorLabel
-            ? 'rgba(18, 18, 18, 0.92)'
-            : isHovered
-            ? 'rgba(37, 99, 235, 0.15)'
-            : 'transparent',
-          borderColor: cursorLabel ? '#121212' : isHovered ? '#2563EB' : 'rgba(18, 18, 18, 0.55)',
+      />
+      {/* The small pointer icon on top (arrow, hand, text beam...) */}
+      <div
+        ref={pointerRef}
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: POINTER_CELL * POINTER_SCALE,
+          height: POINTER_CELL * POINTER_SCALE,
+          backgroundImage: 'url(/cursors/pointers.png)',
+          backgroundSize: `${15 * POINTER_CELL * POINTER_SCALE}px ${POINTER_CELL * POINTER_SCALE}px`,
+          backgroundRepeat: 'no-repeat',
+          backgroundPosition: '0 0',
+          imageRendering: 'pixelated',
         }}
-        transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-        className="flex items-center justify-center rounded-full border border-solid backdrop-blur-[1px]"
-      >
-        {cursorLabel ? (
-          <span className="whitespace-nowrap font-mono text-[10px] font-semibold tracking-wider text-white uppercase">
-            {cursorLabel}
-          </span>
-        ) : null}
-      </motion.div>
-
-      {/* Center sharp pinpoint dot */}
-      {!cursorLabel && (
-        <motion.div
-          style={{
-            x: mouseX,
-            y: mouseY,
-            translateX: '-50%',
-            translateY: '-50%',
-          }}
-          animate={{
-            scale: isHovered ? 0.5 : 1,
-            opacity: isHovered ? 0.7 : 1,
-          }}
-          className="h-1.5 w-1.5 rounded-full bg-[#121212]"
-        />
-      )}
+      />
     </div>
   );
 }
