@@ -14,8 +14,12 @@ type Butterfly = {
   rot: number;
 };
 
-const MAX_BUTTERFLIES = 26;
-const SPAWN_DISTANCE = 42; // px the cursor must travel before the next butterfly appears
+// Set to false if you want butterflies even when the computer's "reduce motion" setting is on.
+// (That setting is meant for people who get dizzy from moving things on screen, so true is the polite default.)
+const RESPECT_REDUCED_MOTION = true;
+
+const MAX_BUTTERFLIES = 30;
+const SPAWN_DISTANCE = 34; // px the cursor must travel before the next butterfly appears
 const HUES = [320, 190, 265, 45, 150]; // pink, cyan, violet, amber, mint
 
 function angleDiff(a: number, b: number) {
@@ -29,9 +33,9 @@ export default function ButterflyTrail() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // No effect for people who asked for less motion, or on touch screens (no cursor).
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    if (window.matchMedia('(pointer: coarse)').matches) return;
+    // No effect for people who asked for less motion, or on devices with no mouse (phones, tablets).
+    if (RESPECT_REDUCED_MOTION && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (!window.matchMedia('(any-hover: hover) and (any-pointer: fine)').matches) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -62,7 +66,7 @@ export default function ButterflyTrail() {
         y,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        size: 7 + Math.random() * 7,
+        size: 10 + Math.random() * 8,
         born: performance.now(),
         life: 1800 + Math.random() * 1400,
         phase: Math.random() * Math.PI * 2,
@@ -75,7 +79,7 @@ export default function ButterflyTrail() {
 
     const draw = (b: Butterfly, t: number) => {
       const age = (t - b.born) / b.life;
-      const alpha = Math.min(age * 8, 1) * (1 - age);
+      const alpha = Math.min(age * 10, 1) * (1 - age * age);
       if (alpha <= 0) return;
 
       const flap = 0.2 + 0.8 * Math.abs(Math.sin(t * 0.021 + b.phase));
@@ -86,7 +90,7 @@ export default function ButterflyTrail() {
       ctx.rotate(b.rot);
       ctx.globalAlpha = alpha;
       ctx.shadowColor = `hsl(${b.hue} 100% 65%)`;
-      ctx.shadowBlur = 8;
+      ctx.shadowBlur = 10;
 
       for (const side of [-1, 1]) {
         ctx.save();
