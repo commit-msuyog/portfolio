@@ -14,6 +14,7 @@ import ProjectDetailModal from './components/ProjectDetailModal';
 import IndexArchiveModal from './components/IndexArchiveModal';
 import { ProjectItem, OpenSourceItem } from './types';
 import ButterflyTrail from './components/ButterflyTrail';
+import Preloader from './components/Preloader';
 
 export default function App() {
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
@@ -32,6 +33,7 @@ export default function App() {
     
     <div className="min-h-screen bg-[#F8F7F3] text-[#121212] selection:bg-[#2563EB] selection:text-white relative">
       {/* unseen.co inspired dynamic fluid cursor */}
+      <Preloader />
       <CustomCursor />
       <ButterflyTrail />
 
